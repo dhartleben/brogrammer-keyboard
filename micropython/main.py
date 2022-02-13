@@ -775,7 +775,13 @@ while True:
                     sv_last_keypress.set_value(utime.time())
     except OSError:
         pass
+
+    # If no keys are down, default to a known good state
+    if num_keys_down == 0:
+        kbd.release_all()
+        current_layer = 0
     
+    # Determine the number of key matrix scans per second, pass that to the second core to be displayed.
     matrix_scans += 1
     total_matrix_scans += 1
     now = utime.time()

@@ -24,3 +24,15 @@ Press the stop icon to stop the currently-running firmware and bring up the inte
 If the interpreter is not showing up, there's likely a race condition because of the utilization of the second core, and the fact that there is no coordination between the first core receving the stop signal but not the second core.
 
 To solve this, continue to unplug and replug the keyboard, each time attempting to bring up the interpreter with the stop icon. Usually it is best timed by pressing stop right after the keyboard lights up.
+
+## Resetting/Setting the Keypress Count
+
+Simply override the value that sv_total_keypresses is set to after reading from EEPROM.
+
+On line 494, substitute your own value as so
+
+```
+ sv_total_keypresses.set_value(123456789)
+```
+
+Then press the "show tripmeter" button to force an EEPROM write to preserve that value.
