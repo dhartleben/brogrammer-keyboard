@@ -27,6 +27,7 @@ import colorsys
 ###########
 
 # This represents a single address in EEPROM (comprised of both block (3 bits) and addr (8 bits)
+# The device is organized as eight blocks of 256 x 8-bit memory.
 # See https://ww1.microchip.com/downloads/en/DeviceDoc/20002213B.pdf
 class MemAddr:
     def __init__(self, *, block, addr):
@@ -56,10 +57,12 @@ class SharedVariable:
 # Constants #
 #############
 
-OWNER = "Jocy"
+OWNER = "Devin"
 NUM_LEDS = 30
 MEM_ADDR_TOTAL_KEYRESSES = MemAddr(block=0, addr=0x00)
 MEM_ADDR_KEYPRESS_TRIPMETER = MemAddr(block=1, addr=0x00)
+MEM_ADDR_PASSWORD_LEN = MemAddr(block=2, addr=0x00)
+MEM_ADDR_PASSWORD = MemAddr(block=2, addr=0x04) # 4 bytes (1 int) after MEM_ADDR_PASSWORD_LEN
 
 ####################
 # Shared Variables #
@@ -76,6 +79,7 @@ sv_matrix_scans_per_sec = SharedVariable(value=None)
 sv_hue = SharedVariable(value=210/360)
 sv_saturation = SharedVariable(value=1)
 sv_lightness = SharedVariable(value=0.5)
+sv_password_saved = SharedVariable(value=0) # 0 = none, 1 = inputting, 2 = saved
 
 ##############################
 # Pin mappings               #
@@ -350,6 +354,25 @@ KEYMAP_L1 = [
         (Keycode, Keycode.F10),
         (Keycode, Keycode.F11),
         (Keycode, Keycode.F12),
+        (Function, "type-saved-password"), # Keycode.BACKSPACE
+        (None, None),
+        (None, None),
+    ],
+    [
+        (None, None),
+        (None, None),
+        (None, None),
+        (None, None),
+        (None, None),
+        (Function, "reset-total-keypresses"), # Keycode.R
+        (None, None),
+        (None, None),
+        (None, None),
+        (None, None),
+        (None, None),
+        (Function, "input-saved-password"), # Keycode.P
+        (None, None),
+        (None, None),
         (None, None),
         (None, None),
         (None, None),
@@ -359,26 +382,7 @@ KEYMAP_L1 = [
         (None, None),
         (None, None),
         (None, None),
-        (None, None),
-        (Function, "reset-total-keypresses"),
-        (None, None),
-        (None, None),
-        (None, None),
-        (None, None),
-        (None, None),
-        (None, None),
-        (None, None),
-        (None, None),
-        (None, None),
-        (None, None),
-        (None, None),
-    ],
-    [
-        (None, None),
-        (None, None),
-        (None, None),
-        (None, None),
-        (Function, "show-debug"),
+        (Function, "show-debug"), # Keycode.D
         (None, None),
         (None, None),
         (None, None),
@@ -439,6 +443,42 @@ capslock_changed = False
 # EEPROM resources #
 ####################
 
+def eeprom_read_byte(mem_addr: MemAddr):
+    # https://ww1.microchip.com/downloads/en/DeviceDoc/20002213B.pdf
+    io_i2c.start()
+    control_byte = (0xA0 + (mem_addr.block << 1) + 0x0)
+    num_acks = io_i2c.write(bytearray([control_byte, mem_addr.addr]))
+    if num_acks != 2:
+        return False, None
+    
+    control_byte = (0xA0 + (mem_addr.block << 1) + 0x1)
+    buf = bytearray(1)
+    io_i2c.start()
+    num_acks = io_i2c.write(bytearray([control_byte]))
+    if num_acks != 1:
+        return False, None
+    io_i2c.readinto(buf)
+    io_i2c.stop()
+    
+    return True, buf[0]
+
+def eeprom_write_byte(mem_addr: MemAddr, byte_value):
+    # https://ww1.microchip.com/downloads/en/DeviceDoc/20002213B.pdf
+    if byte_value not in range(256):
+        return False
+    control_byte = (0xA0 + (mem_addr.block << 1) + 0x0)
+    bytes_to_write = [control_byte, mem_addr.addr]
+    bytes_to_write.extend(byte_value.to_bytes(1, "big"))
+    
+    io_i2c.start()
+    num_acks = io_i2c.write(bytearray(bytes_to_write))
+    if num_acks != (2 + 1):  # 1 ack control byte, 1 ack word address, 1 ack 1 byte of data
+        return False
+    io_i2c.stop()
+    
+    utime.sleep_ms(5) # Allow EEPROM time to write
+    return True
+
 def eeprom_read_int(mem_addr: MemAddr):
     # https://ww1.microchip.com/downloads/en/DeviceDoc/20002213B.pdf
     io_i2c.start()
@@ -473,6 +513,94 @@ def eeprom_write_int(mem_addr: MemAddr, int_value: int):
     
     utime.sleep_ms(5) # Allow EEPROM time to write
     return True
+
+def eeprom_read_string(mem_addr: MemAddr, num_bytes: int):
+    # https://ww1.microchip.com/downloads/en/DeviceDoc/20002213B.pdf
+    io_i2c.start()
+    control_byte = (0xA0 + (mem_addr.block << 1) + 0x0)
+    num_acks = io_i2c.write(bytearray([control_byte, mem_addr.addr]))
+    if num_acks != 2:
+        return False, None
+    
+    control_byte = (0xA0 + (mem_addr.block << 1) + 0x1)
+    buf = bytearray(num_bytes)
+    io_i2c.start()
+    num_acks = io_i2c.write(bytearray([control_byte]))
+    if num_acks != 1:
+        return False, None
+    io_i2c.readinto(buf)
+    io_i2c.stop()
+    
+    print(buf)
+    return True, str(buf, "utf-8")
+
+def eeprom_write_string(mem_addr: MemAddr, str_value: str):
+    # https://ww1.microchip.com/downloads/en/DeviceDoc/20002213B.pdf
+    # Do not use the Page Write capability of this IC because it has page boundary limitations and
+    # it is much simpler to just write each character out individually.
+    # This may cause additional write wear compared to page writes, I'm not sure.
+    if len(str_value) > 2048:
+        return False
+    
+    encoded_bytes = str_value.encode()
+    current_mem_addr = MemAddr(block=mem_addr.block, addr=mem_addr.addr)
+    for byte in encoded_bytes:
+
+        eeprom_write_byte(current_mem_addr, byte)
+        current_mem_addr.addr += 1
+    return True
+
+
+###############################
+# PASSWORD SAVING/AUTO-TYPING #
+###############################
+
+# password = "password"
+# password_len = len(password)
+# 
+# print("Writing password length of", password_len)
+# write_success = eeprom_write_int(MEM_ADDR_PASSWORD_LEN, password_len)
+# if write_success:
+#     print("SUCCESS")
+# 
+# print("Writing password")
+# write_success = eeprom_write_string(MEM_ADDR_PASSWORD, password)
+# if write_success:
+#     print("SUCCESS")
+# 
+# print("Reading password length")
+# read_success, read_password_len = eeprom_read_int(MEM_ADDR_PASSWORD_LEN)
+# if read_success:
+#     print("SUCCESS, read password length:", read_password_len)
+#     
+#     print("Reading password from ", MEM_ADDR_PASSWORD.addr)
+#     read_success, read_password = eeprom_read_string(MEM_ADDR_PASSWORD, read_password_len)
+#     if read_success:
+#         print("SUCCESS, read password: ", read_password)
+#         print("Password saved to EEPROM, re-comment the code to use as normal keyboard")
+#     else:
+#         print("Failed to read password")
+# else:
+#     print("Failed to read password length")
+# while True:
+#     pass
+
+# END PASSWORD EEPROM WRITING CODE =============================================
+
+# print("Reading password length")
+# saved_password = None
+# read_success, read_password_len = eeprom_read_int(MEM_ADDR_PASSWORD_LEN)
+# if read_success:
+#     print("SUCCESS, read password length:", read_password_len)
+#     
+#     print("Reading password from ", MEM_ADDR_PASSWORD.addr)
+#     read_success, saved_password = eeprom_read_string(MEM_ADDR_PASSWORD, read_password_len)
+#     if read_success:
+#         print("Loaded saved password successfully")
+#     else:
+#         print("Failed to read password")
+# else:
+#     print("Failed to read password length")
 
 ################
 # Key tracking #
@@ -574,6 +702,13 @@ def core_two_thread():
                     text = '{:,}'.format(sv_total_keypresses.get_value())
                     size = 2 if (len(text)*12 < 128) else 1
                     draw_centered_text(text, 24, size)
+                    
+                # Show saved password state
+                password_saved = sv_password_saved.get_value()
+                if password_saved == 1:
+                    oled.text("*", 128-5, 0, 1)
+                if password_saved == 2:
+                    oled.text("P", 128-5, 0, 1)
             
             if sv_show_debug_info.get_value():
                 matrix_scans_per_sec = sv_matrix_scans_per_sec.get_value()
@@ -655,6 +790,9 @@ _thread.start_new_thread(core_two_thread, ())
 matrix_scans = 0
 total_matrix_scans = 0
 matrix_scan_time = utime.time()
+inputting_saved_password = False
+password_input = []
+
 while True:
     # Scan the key matrix and issue the appropriate keyboard commands
     # Scanning is as follows:
@@ -706,6 +844,13 @@ while True:
                             if key in [Keycode.LEFT_CONTROL, Keycode.RIGHT_CONTROL]:
                                 control_down = True
                                 print("Control down")
+                            
+                            if inputting_saved_password and key != Keycode.ENTER:
+                                # First check if enter key is pressed while inputting password for saving,
+                                # which would indicate that the user is done inputting their password and it
+                                # should be saved.
+                                password_input.append({"type": "press", "key": key})
+                                
                             try:
                                 kbd.press(key)
                                 pass
@@ -714,7 +859,9 @@ while True:
                     elif key_type == ConsumerControl:
                         print("Sending ConsumerControl code", key)
                         consumer_control.send(key)
+                        
                     elif key_type == Function:
+                        
                         if key == "show-tripmeter":
                             print("Toggling show tripmeter")
                             # If the current tripmeter value is None, set it to the current total keypresses
@@ -726,12 +873,14 @@ while True:
                             
                             # Force EEPROM write (for better posterity)
                             sv_force_eeprom_write.set_value(True)
+                            
                         elif key == "reset-tripmeter":
                             print("Resetting tripmeter")
                             sv_keypress_tripmeter.set_value(sv_total_keypresses.get_value() + 1) # Account for current press
                             
                             # Force EEPROM write (for better posterity)
                             sv_force_eeprom_write.set_value(True)
+                            
                         elif key == "reset-total-keypresses":
                             if control_down:
                                 print("Resetting total keypresses")
@@ -739,10 +888,36 @@ while True:
                                 sv_total_keypresses.set_value(-1) # Account for current press
                                 sv_keypress_tripmeter.set_value(0)
                                 sv_force_eeprom_write.set_value(True)
+                                
                         elif key == "show-debug":
                             print("Toggling show debug")
                             # Signal to core two to display the debug info
                             sv_show_debug_info.set_value(not sv_show_debug_info.get_value())
+                            
+                        elif key == "type-saved-password":
+                            print("type-saved-password running")
+                            if control_down:
+                                print("Typing saved password")
+                                kbd.release_all()
+                                num_keys_down = 0
+                                current_layer = 0
+                                control_down = False
+                                for row in range(0, len(ROW_PINS)):
+                                    for col in range(0, len(COL_PINS)):
+                                        pressed[row][col] = False
+                                for entry in password_input:
+                                    if entry["type"] == "press":
+                                        kbd.press(entry["key"])
+                                    elif entry["type"] == "release":
+                                        kbd.release(entry["key"])
+                                print("Done typing password")
+                                
+                        elif key == "input-saved-password":
+                            if control_down and not inputting_saved_password:
+                                print("Inputting saved password")
+                                inputting_saved_password = True
+                                password_input = []
+                                sv_password_saved.set_value(1)
                     else:
                         print("Unassigned key at {},{} down".format(key, row, col))
 
@@ -761,6 +936,20 @@ while True:
                         current_layer = 0
                     else:
                         if key_type == Keycode:
+                            if inputting_saved_password and len(password_input) > 0:
+                                # Don't save key release to password_input if there have not been presses yet.
+                                # Check if enter key is released while inputting password for saving,
+                                # which would indicate that the user is done inputting their password and it
+                                # should be saved.
+                                if key != Keycode.ENTER:
+                                    password_input.append({"type": "release", "key": key})
+                                else:
+                                    print("Captured password")
+                                    print(password_input)
+                                    inputting_saved_password = False
+                                    sv_password_saved.set_value(2)
+                                    # TODO password_input structure should be saved to EEPROM
+                                    
                             kbd.release(key)
                             print("{:x} at {},{} released".format(key, row, col))
                             if key in [Keycode.LEFT_CONTROL, Keycode.RIGHT_CONTROL]:
@@ -859,3 +1048,4 @@ while True:
     # without calling this, will cause memory to be allocated until the Pico crashes.
     # The crash is difficult-to-identify as it's mostly silent.
     gc.collect()
+
