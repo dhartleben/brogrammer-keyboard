@@ -18,6 +18,7 @@ import rp2
 import ssd1306
 from keyboard import Keyboard, Keycode
 from consumer_control import ConsumerControl
+from mouse import Mouse
 import mcp23017
 from rotary_irq_rp2 import RotaryIRQ
 import colorsys
@@ -550,58 +551,6 @@ def eeprom_write_string(mem_addr: MemAddr, str_value: str):
         current_mem_addr.addr += 1
     return True
 
-
-###############################
-# PASSWORD SAVING/AUTO-TYPING #
-###############################
-
-# password = "password"
-# password_len = len(password)
-# 
-# print("Writing password length of", password_len)
-# write_success = eeprom_write_int(MEM_ADDR_PASSWORD_LEN, password_len)
-# if write_success:
-#     print("SUCCESS")
-# 
-# print("Writing password")
-# write_success = eeprom_write_string(MEM_ADDR_PASSWORD, password)
-# if write_success:
-#     print("SUCCESS")
-# 
-# print("Reading password length")
-# read_success, read_password_len = eeprom_read_int(MEM_ADDR_PASSWORD_LEN)
-# if read_success:
-#     print("SUCCESS, read password length:", read_password_len)
-#     
-#     print("Reading password from ", MEM_ADDR_PASSWORD.addr)
-#     read_success, read_password = eeprom_read_string(MEM_ADDR_PASSWORD, read_password_len)
-#     if read_success:
-#         print("SUCCESS, read password: ", read_password)
-#         print("Password saved to EEPROM, re-comment the code to use as normal keyboard")
-#     else:
-#         print("Failed to read password")
-# else:
-#     print("Failed to read password length")
-# while True:
-#     pass
-
-# END PASSWORD EEPROM WRITING CODE =============================================
-
-# print("Reading password length")
-# saved_password = None
-# read_success, read_password_len = eeprom_read_int(MEM_ADDR_PASSWORD_LEN)
-# if read_success:
-#     print("SUCCESS, read password length:", read_password_len)
-#     
-#     print("Reading password from ", MEM_ADDR_PASSWORD.addr)
-#     read_success, saved_password = eeprom_read_string(MEM_ADDR_PASSWORD, read_password_len)
-#     if read_success:
-#         print("Loaded saved password successfully")
-#     else:
-#         print("Failed to read password")
-# else:
-#     print("Failed to read password length")
-
 ################
 # Key tracking #
 ################
@@ -631,6 +580,19 @@ if success:
 else:
     print("Failed to read keypress_tripmeter from EEPROM", success)
     
+###################
+# Mouse resources #
+###################
+mouse = Mouse()
+
+#################
+# Jiggle config #
+#################
+JIGGLE_MOUSE = False
+JIGGLE_ARROW_KEYS_WITH_MOUSE = False
+JIGGLE_PERIOD_SEC = 5 * 60
+last_mouse_jiggle = None
+
 #################
 # Core 2 Thread #
 #################
@@ -980,6 +942,20 @@ while True:
         matrix_scans = 0
         matrix_scan_time = utime.time()
         
+    # If jiggle is enabled, act as a mouse and jiggle so that it keeps various applications alive on the host computer.
+    # If arrow key jiggle is enabled, press left and then right in quick succession to avoid interrupting the user.
+    if JIGGLE_MOUSE:
+        if not last_mouse_jiggle or (now - last_mouse_jiggle >= JIGGLE_PERIOD_SEC):
+            print("Jiggling mouse, then waiting {} sec".format(JIGGLE_PERIOD_SEC))
+            last_mouse_jiggle = now
+            mouse.move(x=-100)
+            if JIGGLE_ARROW_KEYS_WITH_MOUSE:
+                print("Jiggling arrow keys with mouse")
+                kbd.press(Keycode.LEFT_ARROW)
+                kbd.release(Keycode.LEFT_ARROW)
+                kbd.press(Keycode.RIGHT_ARROW)
+                kbd.release(Keycode.RIGHT_ARROW)
+
     # Handle rotary knob movement
     # See https://en.wikipedia.org/wiki/Rotary_encoder#/media/File:Incremental_directional_encoder.gif
     # If the rotary values are the same, the next time they differ, it indicates which direction the knob
