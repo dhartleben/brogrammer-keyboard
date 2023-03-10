@@ -948,7 +948,7 @@ while True:
         if not last_mouse_jiggle or (now - last_mouse_jiggle >= JIGGLE_PERIOD_SEC):
             print("Jiggling mouse, then waiting {} sec".format(JIGGLE_PERIOD_SEC))
             last_mouse_jiggle = now
-            mouse.move(x=-100)
+            mouse.move(x=-1)
             if JIGGLE_ARROW_KEYS_WITH_MOUSE:
                 print("Jiggling arrow keys with mouse")
                 kbd.press(Keycode.LEFT_ARROW)
