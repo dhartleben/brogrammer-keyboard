@@ -23,6 +23,21 @@ import mcp23017
 from rotary_irq_rp2 import RotaryIRQ
 import colorsys
 
+# Flash the onboard LED twice to indicate that the firmware is automatically starting up
+# Then pause for a period to allow for Thonny to stop the interpreter before starting both
+# threads up
+led = Pin(25, Pin.OUT)
+for i in range(2):
+    led.value(1)
+    utime.sleep_ms(100)
+    led.value(0)
+    utime.sleep_ms(100)
+    
+utime.sleep_ms(3000)
+led.value(1)
+utime.sleep_ms(500)
+led.value(0)
+
 ###########
 # Classes #
 ###########
@@ -113,7 +128,7 @@ oled.show()
 #
 # The reason we use a SoftI2C instead of a hardware-supported I2C is because
 # we implement custom I2C EEPROM communication below.
-io_i2c = SoftI2C(io_scl, io_sda, freq=100 * 1000)
+io_i2c = SoftI2C(io_scl, io_sda, freq=50 * 1000)
 io_i2c_lock = _thread.allocate_lock()
 
 # The IO expander is used since the Pico doesn't have quite enough GPIO for
